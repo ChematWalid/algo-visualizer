@@ -205,7 +205,7 @@ function removeBtree(root: TreeNode | null, key: string, order: number, steps: T
   const remove = (current: TreeNode, value: string): void => {
     let index = 0;
     while (index < current.keys.length && compareKeys(current.keys[index]!, value) < 0) { counters.comparisons++; index++; }
-    const found = current.keys[index] === value;
+    const found = current.keys[index] !== undefined && compareKeys(current.keys[index]!, value) === 0;
     if (found && !current.children.length) {
       current.keys.splice(index, 1); steps.push(snapshot("Remove from leaf", `Remove ${value} from its leaf node.`, root, counters)); return;
     }
@@ -325,7 +325,7 @@ export function runOperation(doc: TreeDocument, operation: TreeOperation, input 
     const target = input.trim();
     if (doc.kind.startsWith("heap-")) {
       const values = root ? flattenBreadthFirst(root).map((item) => item.keys[0]!) : [];
-      const index = values.indexOf(target);
+      const index = values.findIndex((value) => compareKeys(value, target) === 0);
       if (index >= 0) values.splice(index, 1);
       steps.push(snapshot("Remove heap key", index < 0 ? `${target} was not found in the heap.` : `Remove ${target}; rebuild the complete shape and restore heap order.`, root, counters));
       const next = buildHeap(values, doc.kind === "heap-min", steps, counters);
@@ -338,7 +338,7 @@ export function runOperation(doc: TreeDocument, operation: TreeOperation, input 
       const cmp = compareKeys(target, n.keys[0]!);
       if (cmp < 0 && !doc.kind.startsWith("heap-") && doc.kind !== "custom-binary" && doc.kind !== "custom-nary") { const child = binaryChild(n, 0); if (child) setBinaryChild(n, 0, remove(child) ?? undefined); return n; }
       if (cmp > 0 && !doc.kind.startsWith("heap-") && doc.kind !== "custom-binary" && doc.kind !== "custom-nary") { const child = binaryChild(n, 1); if (child) setBinaryChild(n, 1, remove(child) ?? undefined); return n; }
-      if (n.keys.includes(target)) {
+      if (doc.kind === "custom-binary" || doc.kind === "custom-nary" ? n.keys.includes(target) : compareKeys(n.keys[0]!, target) === 0) {
         const left = binaryChild(n, 0), right = binaryChild(n, 1);
         if (left && right) { let successor = right; while (binaryChild(successor, 0)) successor = binaryChild(successor, 0)!; n.keys[0] = successor.keys[0]!; setBinaryChild(n, 1, remove(right) ?? undefined); return n; }
         if (left || right) return left ?? right ?? null;
@@ -352,7 +352,9 @@ export function runOperation(doc: TreeDocument, operation: TreeOperation, input 
   }
   if (operation === "extract-root" && doc.kind.startsWith("heap-")) {
     const values = root ? flattenBreadthFirst(root).map((item) => item.keys[0]!) : [];
-    const removed = values.shift();
+    const removed = values[0];
+    const last = values.pop();
+    if (values.length) values[0] = last!;
     if (!values.length) return { root: null, result: removed ?? "Tree is empty.", steps: [snapshot("Extract root", removed ? `Remove root key ${removed}; the heap is now empty.` : "Tree is empty.", null, counters)] };
     let index = 0; const min = doc.kind === "heap-min";
     while (index * 2 + 1 < values.length) {
