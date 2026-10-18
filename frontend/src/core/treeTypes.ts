@@ -30,11 +30,12 @@ export interface TreeCounters {
 export interface TraceStep {
   title: string;
   detail: string;
+  detailFr?: string;
   tree: TreeNode | null;
   counters: TreeCounters;
 }
 
-export type TreeOperation = "insert" | "delete" | "search" | "preorder" | "inorder" | "postorder" | "levelorder" | "min" | "max";
+export type TreeOperation = "insert" | "delete" | "extract-root" | "search" | "preorder" | "inorder" | "postorder" | "levelorder" | "min" | "max";
 
 export const emptyCounters = (): TreeCounters => ({ comparisons: 0, visits: 0, swaps: 0, rotations: 0 });
 export const makeDocument = (kind: TreeKind = "bst"): TreeDocument => ({ version: 1, name: "Untitled tree", kind, root: null, order: 3, updatedAt: new Date().toISOString() });

@@ -1,7 +1,30 @@
 import { binaryChild, cloneNode, compareKeys, emptyCounters, node, setBinaryChild, type TraceStep, type TreeCounters, type TreeDocument, type TreeNode, type TreeOperation } from "./treeTypes";
 
 export interface OperationResult { root: TreeNode | null; steps: TraceStep[]; result?: string; found?: boolean }
-const snapshot = (title: string, detail: string, root: TreeNode | null, counters: TreeCounters): TraceStep => ({ title, detail, tree: cloneNode(root), counters: { ...counters } });
+function frenchDetail(title: string, detail: string): string {
+  const comparison = detail.match(/^Compare (.+) with (.+)\.$/);
+  if (comparison) return `Comparer ${comparison[1]} avec ${comparison[2]}.`;
+  const branch = detail.match(/^(.+) ([<≥]) (.+); continue (left|right)\.$/);
+  if (branch) return `Comparer ${branch[1]} ${branch[2]} ${branch[3]} ; poursuivre à ${branch[4] === "left" ? "gauche" : "droite"}.`;
+  const attach = detail.match(/^Attach (.+) as the (left|right) child\.$/);
+  if (attach) return `Attacher ${attach[1]} comme fils ${attach[2] === "left" ? "gauche" : "droit"}.`;
+  const key = detail.match(/(?:Place|Insert|Create) (.+?)(?: at the insertion point| in sorted order| into this node in sorted order| in the leaf in sorted order| in the next open position| as a new root\.)/);
+  if (key) return `${title === "Create node" || title === "Create root" ? "Créer un nœud avec" : "Insérer"} ${key[1]} à sa position correcte.`;
+  if (detail.startsWith("Visit order:")) return `Ordre de visite :${detail.slice("Visit order:".length)}`;
+  if (detail.includes("already present")) return `${detail.split(" is already present")[0]} est déjà présent ; les clés dupliquées ne sont pas admises ici.`;
+  if (detail.includes("Rotate right")) return "Effectuer une rotation droite pour rétablir l’équilibre AVL.";
+  if (detail.includes("Rotate left")) return "Effectuer une rotation gauche pour rétablir l’équilibre AVL.";
+  if (detail.includes("Promote")) return detail.replace("Promote", "Promouvoir").replace("and split the full child into two nodes.", "et diviser le nœud plein en deux.").replace("to a new root.", "dans une nouvelle racine.").replace("the overflowing node becomes two ordered children.", "le nœud débordant devient deux fils ordonnés.");
+  if (detail.includes("Borrow from")) return "Emprunter une clé au frère et faire passer le séparateur par le parent.";
+  if (detail.includes("Merge")) return "Fusionner les nœuds concernés et rétablir les contraintes d’occupation.";
+  if (detail.includes("Remove")) return detail.replace("Remove", "Supprimer").replace("from its leaf node.", "de sa feuille.").replace("if it exists.", "si elle existe.");
+  if (detail.includes("root contains")) return detail.replace("The root contains", "La racine contient");
+  if (detail.includes("heap order")) return detail.replace("Swap", "Échanger").replace("with", "avec").replace("to restore heap order.", "pour rétablir la propriété du tas.");
+  if (detail.includes("minimum")) return detail.replace("The minimum key is", "La clé minimale est");
+  if (detail.includes("maximum")) return detail.replace("The maximum key is", "La clé maximale est");
+  return "Étape de l’algorithme : observer la structure mise en évidence.";
+}
+const snapshot = (title: string, detail: string, root: TreeNode | null, counters: TreeCounters): TraceStep => ({ title, detail, detailFr: frenchDetail(title, detail), tree: cloneNode(root), counters: { ...counters } });
 const count = (root: TreeNode | null): number => root ? root.keys.length + root.children.reduce((sum, child) => sum + count(child), 0) : 0;
 
 function rotateLeft(root: TreeNode): TreeNode {
@@ -51,31 +74,35 @@ function insertBinary(root: TreeNode | null, key: string, kind: TreeDocument["ki
   else { const created = node(key); setBinaryChild(root, side, created); steps.push(snapshot("Insert", `Attach ${key} as the ${goesLeft ? "left" : "right"} child.`, root, counters)); }
   return kind === "avl" ? rebalance(root, steps, counters) : root;
 }
-function heapifyUp(root: TreeNode, steps: TraceStep[], counters: TreeCounters, min: boolean): TreeNode {
-  const flat = flattenBreadthFirst(root);
-  for (let i = flat.length - 1; i > 0; i--) {
-    const p = Math.floor((i - 1) / 2); counters.comparisons++;
-    if ((compareKeys(flat[i]!.keys[0]!, flat[p]!.keys[0]!) < 0) !== min) break;
-    [flat[i]!.keys[0], flat[p]!.keys[0]] = [flat[p]!.keys[0]!, flat[i]!.keys[0]!]; counters.swaps++;
-    steps.push(snapshot("Sift up", `Swap ${flat[i]!.keys[0]} with its parent to restore heap order.`, root, counters));
+function siftDownArray(values: string[], start: number, min: boolean, counters: TreeCounters, onSwap?: (values: string[]) => void): void {
+  let index = start;
+  while (index * 2 + 1 < values.length) {
+    let child = index * 2 + 1; const right = child + 1;
+    if (right < values.length) { counters.comparisons++; if ((compareKeys(values[right]!, values[child]!) < 0) === min) child = right; }
+    counters.comparisons++;
+    if ((compareKeys(values[child]!, values[index]!) < 0) !== min) break;
+    [values[index], values[child]] = [values[child]!, values[index]!]; counters.swaps++; onSwap?.(values); index = child;
   }
-  return root;
 }
 function buildHeap(values: string[], min: boolean, steps: TraceStep[], counters: TreeCounters): TreeNode | null {
-  let root: TreeNode | null = null;
-  for (const key of values) {
-    const fresh = node(key);
-    if (!root) root = fresh;
-    else {
-      const flat = flattenBreadthFirst(root);
-      const index = flat.length; setBinaryChild(flat[Math.floor((index - 1) / 2)]!, (index % 2) as 0 | 1, fresh);
-      root = heapifyUp(root, steps, counters, min);
-    }
-    steps.push(snapshot("Add to heap", `Place ${key} in the next open position.`, root, counters));
-  }
-  return root;
+  for (let index = Math.floor(values.length / 2) - 1; index >= 0; index--) siftDownArray(values, index, min, counters, (current) => steps.push(snapshot("Sift down", `Swap a parent with its higher-priority child.`, heapFromArray(current), counters)));
+  const root = heapFromArray(values); steps.push(snapshot("Build heap", "Arrange all values into a complete tree and restore heap order bottom-up.", root, counters)); return root;
 }
-function flatten(root: TreeNode | null): TreeNode[] { const out: TreeNode[] = []; const visit = (n: TreeNode) => { out.push(n); n.children.forEach(visit); }; if (root) visit(root); return out; }
+function insertHeapValues(root: TreeNode | null, newValues: string[], min: boolean, steps: TraceStep[], counters: TreeCounters): TreeNode | null {
+  const values = root ? flattenBreadthFirst(root).map((item) => item.keys[0]!) : [];
+  for (const key of newValues) {
+    values.push(key); let index = values.length - 1;
+    steps.push(snapshot("Add to heap", `Place ${key} in the next open position.`, heapFromArray(values), counters));
+    while (index > 0) { const parent = Math.floor((index - 1) / 2); counters.comparisons++; if ((compareKeys(values[index]!, values[parent]!) < 0) !== min) break; [values[index], values[parent]] = [values[parent]!, values[index]!]; counters.swaps++; steps.push(snapshot("Sift up", `Swap ${values[parent]} with its parent to restore heap order.`, heapFromArray(values), counters)); index = parent; }
+  }
+  return heapFromArray(values);
+}
+function heapFromArray(values: string[]): TreeNode | null {
+  if (!values.length) return null;
+  const nodes = values.map((value) => node(value));
+  for (let index = 1; index < nodes.length; index++) setBinaryChild(nodes[Math.floor((index - 1) / 2)]!, (index % 2) as 0 | 1, nodes[index]!);
+  return nodes[0]!;
+}
 function flattenBreadthFirst(root: TreeNode): TreeNode[] { const result: TreeNode[] = [], queue = [root]; while (queue.length) { const current = queue.shift()!; result.push(current); queue.push(...current.children); } return result; }
 
 function insertMway(root: TreeNode | null, key: string, order: number, steps: TraceStep[], counters: TreeCounters): TreeNode {
@@ -273,7 +300,7 @@ export function runOperation(doc: TreeDocument, operation: TreeOperation, input 
   if (operation === "search") { const found = doc.kind === "mway" || doc.kind === "btree" ? searchMulti(root, input.trim(), steps, counters) : search(root, input.trim(), doc.kind === "bst" || doc.kind === "avl", steps, counters); return { root, found, result: found ? `${input} was found.` : `${input} was not found.`, steps: steps.length ? steps : [snapshot("Empty tree", "There are no nodes to inspect.", root, counters)] }; }
   if (operation === "insert") {
     const values = input.split(/[\s,;]+/).filter(Boolean);
-    if (doc.kind.startsWith("heap-")) return { root: buildHeap([...(root ? flatten(root).map((n) => n.keys[0]!) : []), ...values], doc.kind === "heap-min", steps, counters), steps };
+      if (doc.kind.startsWith("heap-")) return { root: insertHeapValues(root, values, doc.kind === "heap-min", steps, counters), steps };
     let current = root;
     for (const key of values) {
       if (doc.kind === "custom-binary" || doc.kind === "custom-nary") { if (!current) current = node(key); else current.children.push(node(key)); steps.push(snapshot("Add node", `Add ${key} to the selected tree.`, current, counters)); }
@@ -312,11 +339,50 @@ export function runOperation(doc: TreeDocument, operation: TreeOperation, input 
     if (doc.kind === "avl") next = rebalanceAvlAfterDelete(next, steps, counters);
     steps.push(snapshot("Remove key", `Remove ${target} if it exists.`, next, counters)); return { root: next, steps };
   }
-  if (operation === "min" || operation === "max") { const values = flatten(root).flatMap((n) => n.keys).sort(compareKeys); const value = values[operation === "min" ? 0 : values.length - 1]; return { root, result: value ?? "Tree is empty.", steps: [snapshot(operation === "min" ? "Minimum" : "Maximum", value ? `The ${operation}imum key is ${value}.` : "Tree is empty.", root, counters)] }; }
+  if (operation === "extract-root" && doc.kind.startsWith("heap-")) {
+    const values = root ? flattenBreadthFirst(root).map((item) => item.keys[0]!) : [];
+    const removed = values.shift();
+    if (!values.length) return { root: null, result: removed ?? "Tree is empty.", steps: [snapshot("Extract root", removed ? `Remove root key ${removed}; the heap is now empty.` : "Tree is empty.", null, counters)] };
+    let index = 0; const min = doc.kind === "heap-min";
+    while (index * 2 + 1 < values.length) {
+      let child = index * 2 + 1; const right = child + 1;
+      if (right < values.length && ((compareKeys(values[right]!, values[child]!) < 0) === min)) { counters.comparisons++; child = right; }
+      counters.comparisons++;
+      if (((compareKeys(values[child]!, values[index]!) < 0) !== min)) break;
+      [values[index], values[child]] = [values[child]!, values[index]!]; counters.swaps++;
+      const frame = heapFromArray(values); steps.push(snapshot("Sift down", `Swap ${values[index]} with its higher-priority child.`, frame, counters)); index = child;
+    }
+    const next = heapFromArray(values); steps.unshift(snapshot("Extract root", `Remove root key ${removed}; move the final key to the root, then restore heap order.`, root, counters));
+    if (!steps.length) steps.push(snapshot("Heap restored", "The remaining keys still satisfy heap order.", next, counters));
+    return { root: next, result: `Extracted ${removed}.`, steps };
+  }
+  if (operation === "min" || operation === "max") {
+    if (!root) return { root, result: "Tree is empty.", steps: [snapshot(operation === "min" ? "Minimum" : "Maximum", "Tree is empty.", root, counters)] };
+    if (doc.kind.startsWith("heap-")) { const value = root.keys[0]; return { root, result: value, steps: [snapshot(operation === "min" ? "Minimum" : "Maximum", `The root contains ${value}.`, root, counters)] }; }
+    if (doc.kind === "bst" || doc.kind === "avl") {
+      let current = root; const side = operation === "min" ? 0 : 1;
+      while (binaryChild(current, side)) { counters.visits++; counters.comparisons++; current = binaryChild(current, side)!; steps.push(snapshot(operation === "min" ? "Move left" : "Move right", `Follow the ${operation === "min" ? "left" : "right"} child to keep looking for the ${operation}imum.`, current, counters)); }
+      return { root, result: current.keys[0], steps: [...steps, snapshot(operation === "min" ? "Minimum" : "Maximum", `The ${operation === "min" ? "minimum" : "maximum"} key is ${current.keys[0]}.`, current, counters)] };
+    }
+    if (doc.kind === "btree" || doc.kind === "mway") {
+      let current = root;
+      while (true) {
+        const side = operation === "min" ? 0 : current.keys.length;
+        const child = doc.kind === "btree" ? current.children[side === 0 ? 0 : current.children.length - 1] : current.children.find((item) => item.position === side);
+        if (!child) { const value = current.keys[operation === "min" ? 0 : current.keys.length - 1]; return { root, result: value, steps: [...steps, snapshot(operation === "min" ? "Minimum" : "Maximum", `The ${operation === "min" ? "minimum" : "maximum"} key is ${value}.`, current, counters)] }; }
+        counters.visits++; current = child; steps.push(snapshot(operation === "min" ? "Move to first child" : "Move to last child", `Follow the ${operation === "min" ? "first" : "last"} search interval.`, current, counters));
+      }
+    }
+    let value: string | undefined;
+    const scan = (current: TreeNode) => { counters.visits++; for (const item of current.keys) { counters.comparisons++; if (value === undefined || (operation === "min" ? compareKeys(item, value) < 0 : compareKeys(item, value) > 0)) value = item; } current.children.forEach(scan); };
+    scan(root);
+    return { root, result: value ?? "Tree is empty.", steps: [snapshot(operation === "min" ? "Minimum" : "Maximum", `The ${operation === "min" ? "minimum" : "maximum"} key is ${value}.`, root, counters)] };
+  }
   return { root, steps };
 }
 
 export function buildFromArray(doc: TreeDocument, values: string[]): TreeDocument {
+  if (doc.kind.startsWith("heap-")) return { ...doc, root: buildHeap(values, doc.kind === "heap-min", [], emptyCounters()) };
   let next = { ...doc, root: null as TreeNode | null };
   for (const value of values) next.root = runOperation({ ...next, kind: doc.kind }, "insert", value).root;
   return next;

@@ -2,22 +2,30 @@ import { useMemo } from "react";
 import { hierarchy, tree } from "d3-hierarchy";
 import type { TreeNode } from "../../core/treeTypes";
 
-function ordered(node: TreeNode): TreeNode {
-  const children = node.children.map(ordered);
-  if (children.every((child) => child.position !== undefined)) children.sort((a, b) => a.position! - b.position!);
-  return { ...node, children };
+interface LayoutNode extends TreeNode { placeholder?: boolean; children: LayoutNode[]; }
+function layoutData(node: TreeNode): LayoutNode {
+  if (node.children.some((child) => child.position !== undefined)) {
+    const byPosition = new Map(node.children.filter((child) => child.position !== undefined).map((child) => [child.position!, child]));
+    const maxPosition = Math.max(node.keys.length, ...byPosition.keys());
+    const children = Array.from({ length: maxPosition + 1 }, (_, position) => {
+      const child = byPosition.get(position);
+      return child ? layoutData(child) : { id: `${node.id}-empty-${position}`, keys: [], children: [], placeholder: true } as LayoutNode;
+    });
+    return { ...node, children };
+  }
+  return { ...node, children: node.children.map(layoutData) };
 }
 
 export function TreeCanvas({ root, activeKey }: { root: TreeNode | null; activeKey?: string }) {
   const layout = useMemo(() => {
     if (!root) return null;
-    const hierarchyRoot = hierarchy(ordered(root), (datum) => datum.children);
-    const placed = tree<TreeNode>().nodeSize([96, 112])(hierarchyRoot);
+    const hierarchyRoot = hierarchy<LayoutNode>(layoutData(root), (datum) => datum.children);
+    const placed = tree<LayoutNode>().nodeSize([96, 112])(hierarchyRoot);
     const nodes = placed.descendants();
-    const links = placed.links();
+    const links = placed.links().filter((link) => !link.source.data.placeholder && !link.target.data.placeholder);
     const minX = Math.min(...nodes.map((item) => item.x));
     const maxX = Math.max(...nodes.map((item) => item.x));
-    return { nodes, links, minX, maxX, width: Math.max(420, maxX - minX + 160), height: Math.max(260, (placed.height + 1) * 112 + 70) };
+    return { nodes: nodes.filter((item) => !item.data.placeholder), links, minX, maxX, width: Math.max(420, maxX - minX + 160), height: Math.max(260, (placed.height + 1) * 112 + 70) };
   }, [root]);
 
   if (!layout) return <div className="tree-empty"><span className="empty-orbit">∅</span><strong>Your tree is empty</strong><span>Choose a structure and add a key to begin.</span></div>;

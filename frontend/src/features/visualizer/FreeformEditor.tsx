@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Background, Controls, ReactFlow, type Connection, type Edge, type Node, type NodeChange, type EdgeChange, type NodeMouseHandler } from "@xyflow/react";
 import { TextInput } from "@mantine/core";
 import { hierarchy, tree } from "d3-hierarchy";
@@ -6,7 +6,7 @@ import type { TreeNode } from "../../core/treeTypes";
 import { node as createNode } from "../../core/treeTypes";
 import "@xyflow/react/dist/style.css";
 
-interface Props { root: TreeNode | null; kind: "custom-binary" | "custom-nary"; onChange: (root: TreeNode | null) => void; }
+interface Props { root: TreeNode | null; kind: "custom-binary" | "custom-nary"; onChange: (root: TreeNode | null) => void; language: "en" | "fr"; }
 function flatten(root: TreeNode | null): { nodes: Node[]; edges: Edge[] } {
   if (!root) return { nodes: [], edges: [] };
   const laid = tree<TreeNode>().nodeSize([145, 120])(hierarchy(root, (item) => item.children));
@@ -24,10 +24,11 @@ function attach(root: TreeNode | null, parentId: string, child: TreeNode): TreeN
 function find(root: TreeNode | null, id: string): TreeNode | undefined { if (!root) return; if (root.id === id) return root; for (const child of root.children) { const found = find(child, id); if (found) return found; } }
 function renameNode(root: TreeNode | null, id: string, value: string): TreeNode | null { if (!root) return null; if (root.id === id) return { ...root, keys: [value] }; return { ...root, children: root.children.map((child) => renameNode(child, id, value)!).filter(Boolean) }; }
 
-export function FreeformEditor({ root, kind, onChange }: Props) {
+export function FreeformEditor({ root, kind, onChange, language }: Props) {
   const [selectedId, setSelectedId] = useState(root?.id ?? "");
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => flatten(root), [root]);
   const selected = find(root, selectedId);
+  useEffect(() => { if (!root) setSelectedId(""); else if (!selected) setSelectedId(root.id); }, [root, selected]);
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     const removed = changes.filter((change) => change.type === "remove").map((change) => change.id);
     if (removed.length) { let next = root; for (const id of removed) next = removeNode(next, id); onChange(next); if (removed.includes(selectedId)) setSelectedId(""); return; }
@@ -39,14 +40,17 @@ export function FreeformEditor({ root, kind, onChange }: Props) {
     if (!connection.source || !connection.target || connection.source === connection.target) return;
     const moving = find(root, connection.source);
     if (!moving || find(moving, connection.target)) return;
+    const target = find(root, connection.target);
+    if (!target || (kind === "custom-binary" && target.children.filter((item) => item.id !== connection.source).length >= 2)) return;
     const detached = removeNode(root, connection.source);
+    if (!detached) return;
     onChange(attach(detached, connection.target, moving)); setSelectedId(connection.source);
-  }, [onChange, root]);
-  const addRoot = () => { if (!root) onChange(createNode("Root")); };
+  }, [kind, onChange, root]);
+  const addRoot = () => { if (!root) { const created = createNode(language === "en" ? "Root" : "Racine"); onChange(created); setSelectedId(created.id); } };
   const addChild = () => { if (!selected) return; const created = createNode("Node"); onChange(attach(root, selected.id, created)); setSelectedId(created.id); };
   const onNodeClick: NodeMouseHandler = useCallback((_event, item) => setSelectedId(item.id), []);
   return <div className="freeform-editor">
-    <div className="editor-actions"><button onClick={addRoot} disabled={Boolean(root)}>Add root</button><button onClick={addChild} disabled={!selected || (kind === "custom-binary" && selected.children.length >= 2)}>Add child</button>{selected && <TextInput aria-label="Selected node label" size="xs" value={selected.keys[0] ?? ""} onChange={(event) => onChange(renameNode(root, selected.id, event.currentTarget.value))} />}{selected && <button onClick={() => { onChange(removeNode(root, selected.id)); setSelectedId(""); }}>Delete node</button>}<span>Drag nodes · connect handles to reparent</span></div>
+    <div className="editor-actions"><button onClick={addRoot} disabled={Boolean(root)}>{language === "en" ? "Add root" : "Ajouter la racine"}</button><button onClick={addChild} disabled={!selected || (kind === "custom-binary" && selected.children.length >= 2)}>{language === "en" ? "Add child" : "Ajouter un fils"}</button>{selected && <TextInput aria-label={language === "en" ? "Selected node label" : "Étiquette du nœud sélectionné"} size="xs" value={selected.keys[0] ?? ""} onChange={(event) => onChange(renameNode(root, selected.id, event.currentTarget.value))} />}{selected && <button onClick={() => { onChange(removeNode(root, selected.id)); setSelectedId(""); }}>{language === "en" ? "Delete node" : "Supprimer le nœud"}</button>}<span>{language === "en" ? "Drag to move · connect handles to reparent" : "Glissez pour déplacer · reliez les poignées pour déplacer"}</span></div>
     <ReactFlow nodes={initialNodes} edges={initialEdges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={onNodeClick} fitView nodesDraggable nodesConnectable>
       <Background color="#30372e" gap={22} /><Controls showInteractive={false} />
     </ReactFlow>
