@@ -168,16 +168,27 @@ function removeMway(root: TreeNode | null, key: string, steps: TraceStep[], coun
   const foundIndex = root.keys.findIndex((value) => { counters.comparisons++; return compareKeys(value, key) === 0; });
   if (foundIndex >= 0) {
     if (root.children.length) {
-      let successor = root.children.find((child) => child.position === foundIndex + 1) ?? root.children[foundIndex + 1];
-      while (successor?.children.length) successor = successor.children[0]!;
-      if (successor?.keys[0]) {
-        const replacement = successor.keys[0]; root.keys[foundIndex] = replacement;
-        const childIndex = root.children.findIndex((child) => child.position === foundIndex + 1);
-        if (childIndex >= 0) { const next = removeMway(root.children[childIndex]!, replacement, steps, counters); if (next) root.children[childIndex] = next; else root.children.splice(childIndex, 1); }
-        steps.push(snapshot("Replace with successor", `Replace ${key} with its inorder successor ${replacement}.`, root, counters)); return root;
+      const successorIndex = root.children.findIndex((child) => child.position === foundIndex + 1);
+      const predecessorIndex = root.children.findIndex((child) => child.position === foundIndex);
+      let replacementIndex = successorIndex, useSuccessor = successorIndex >= 0;
+      if (replacementIndex < 0) replacementIndex = predecessorIndex;
+      let replacementNode = replacementIndex >= 0 ? root.children[replacementIndex] : undefined;
+      while (replacementNode?.children.length) {
+        const nextPosition = useSuccessor ? 0 : replacementNode.keys.length;
+        const boundaryChild = replacementNode.children.find((child) => child.position === nextPosition);
+        if (!boundaryChild) break;
+        replacementNode = boundaryChild;
+      }
+      const replacement = useSuccessor ? replacementNode?.keys[0] : replacementNode?.keys.at(-1);
+      if (replacement && replacementIndex >= 0) {
+        root.keys[foundIndex] = replacement;
+        const next = removeMway(root.children[replacementIndex]!, replacement, steps, counters);
+        if (next) root.children[replacementIndex] = next; else root.children.splice(replacementIndex, 1);
+        steps.push(snapshot(useSuccessor ? "Replace with successor" : "Replace with predecessor", `Replace ${key} with its inorder ${useSuccessor ? "successor" : "predecessor"} ${replacement}.`, root, counters)); return root;
       }
     }
     root.keys.splice(foundIndex, 1); steps.push(snapshot("Remove key", `Remove ${key} from its M-way search node.`, root, counters));
+    root.children.forEach((child) => { if (child.position !== undefined && child.position > foundIndex + 1) child.position = child.position - 1; });
     if (!root.keys.length) return root.children[0] ?? null;
     return root;
   }
@@ -353,7 +364,7 @@ export function runOperation(doc: TreeDocument, operation: TreeOperation, input 
       const frame = heapFromArray(values); steps.push(snapshot("Sift down", `Swap ${values[index]} with its higher-priority child.`, frame, counters)); index = child;
     }
     const next = heapFromArray(values); steps.unshift(snapshot("Extract root", `Remove root key ${removed}; move the final key to the root, then restore heap order.`, root, counters));
-    if (!steps.length) steps.push(snapshot("Heap restored", "The remaining keys still satisfy heap order.", next, counters));
+    steps.push(snapshot("Heap restored", "The remaining keys still satisfy heap order.", next, counters));
     return { root: next, result: `Extracted ${removed}.`, steps };
   }
   if (operation === "min" || operation === "max") {

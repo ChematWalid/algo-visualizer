@@ -55,10 +55,15 @@ export function validateDocument(value: unknown): value is TreeDocument {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<TreeDocument>;
   const kinds: TreeKind[] = ["custom-binary", "custom-nary", "bst", "avl", "heap-min", "heap-max", "mway", "btree"];
+  const ids = new Set<string>();
   const validNode = (n: unknown): n is TreeNode => {
     if (!n || typeof n !== "object") return false;
     const v = n as Partial<TreeNode>;
-    return typeof v.id === "string" && Array.isArray(v.keys) && v.keys.every((k) => typeof k === "string") && Array.isArray(v.children) && v.children.every(validNode);
+    if (typeof v.id !== "string" || ids.has(v.id) || !Array.isArray(v.keys) || !v.keys.every((k) => typeof k === "string") || !Array.isArray(v.children)) return false;
+    if (v.position !== undefined && (!Number.isInteger(v.position) || v.position < 0)) return false;
+    ids.add(v.id);
+    return v.children.every(validNode);
   };
-  return candidate.version === 1 && typeof candidate.name === "string" && kinds.includes(candidate.kind as TreeKind) && (candidate.root === null || validNode(candidate.root)) && Number.isInteger(candidate.order) && typeof candidate.updatedAt === "string";
+  const validOrder = Number.isInteger(candidate.order) && (candidate.kind === "btree" ? [3, 5, 7, 9].includes(candidate.order!) : candidate.kind === "mway" ? candidate.order! >= 3 && candidate.order! <= 8 : true);
+  return candidate.version === 1 && typeof candidate.name === "string" && kinds.includes(candidate.kind as TreeKind) && (candidate.root === null || validNode(candidate.root)) && validOrder && typeof candidate.updatedAt === "string";
 }
